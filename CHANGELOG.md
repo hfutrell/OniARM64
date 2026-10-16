@@ -8,6 +8,13 @@ are written for players; the per-commit developer detail lives in
 land. At each release cut, the Unreleased section becomes the body of the
 GitHub release notes and gets stamped with the version + date.
 
+## Unreleased
+
+- Chapter 13 (Phoenix Rising) no longer crashes on load when the game data
+  sits on a case-sensitive volume. The level asks for its scripts in
+  `IGMD/tctf_II`, but every PC and Mac copy of the data names that folder
+  `tctf_ii`; file lookups now fall back to matching names ignoring case.
+
 ## 1.3.1 — 2026-10-04
 
 ### Cutscenes

@@ -77,6 +77,60 @@ BFiFileRef_PathNameExists(
 	return access(inPath, F_OK) == 0;
 }
 
+#include <strings.h>
+
+// Oni's data spells its file and folder names with inconsistent case (level
+// 18's scripts are in IGMD/tctf_ii; the level asks for tctf_II), which a
+// case-insensitive disk (the Mac's default) hides and a case-sensitive one
+// (iPhone and iPad, a case-sensitive APFS volume, Linux) does not. A path that
+// does not exist as spelled is rewritten, component by component, to the
+// entries that match it ignoring case, where they do. Returns whether it
+// changed the path.
+static UUtBool
+BFiResolveCase(
+	char		*ioPath)
+{
+	char		out[BFcMaxPathLength];
+	const char	*p = ioPath;
+	size_t		len = 0;
+
+	if (ioPath[0] == '\0' || access(ioPath, F_OK) == 0) { return UUcFalse; }
+	out[0] = '\0';
+	if (*p == '/') { out[0] = '/'; out[1] = '\0'; len = 1; while (*p == '/') { p++; } }
+	while (*p != '\0') {
+		char		component[BFcMaxPathLength];
+		size_t		n = strcspn(p, "/");
+		DIR			*dir;
+		struct dirent	*entry;
+		const char	*use = component;
+
+		if (n >= sizeof(component)) { return UUcFalse; }
+		memcpy(component, p, n);
+		component[n] = '\0';
+		if (len + n + 2 >= sizeof(out)) { return UUcFalse; }
+		snprintf(out + len, sizeof(out) - len, "%s", component);
+		if (access(out, F_OK) != 0) {
+			out[len] = '\0';
+			dir = opendir(len == 0 ? "." : out);
+			if (dir == NULL) { return UUcFalse; }
+			while ((entry = readdir(dir)) != NULL) {
+				if (strcasecmp(entry->d_name, component) == 0) { use = entry->d_name; break; }
+			}
+			if (entry == NULL) { closedir(dir); return UUcFalse; } // nothing by that name: leave the path as spelled
+			snprintf(out + len, sizeof(out) - len, "%s", use);
+			closedir(dir);
+		}
+		len = strlen(out);
+		p += n;
+		if (*p == '/') {
+			out[len++] = '/'; out[len] = '\0';
+			while (*p == '/') { p++; }
+		}
+	}
+	UUrString_Copy(ioPath, out, BFcMaxPathLength);
+	return UUcTrue;
+}
+
 static UUtError
 BFiCheckFileName(
 	const char		*inFileName)
@@ -117,6 +171,7 @@ BFrFileRef_Set(
 {
 	UUtError	error;
 	char			mungedName[BFcMaxPathLength];
+	UUtBool		resolved;
 
 	UUmAssert(NULL != inFileRef);
 	UUmAssert(NULL != inFileName);
@@ -131,13 +186,14 @@ BFrFileRef_Set(
 	UUmError_ReturnOnError(error);
 
 	BFiConvertWin2Unix(inFileName, mungedName);
+	resolved = BFiResolveCase(mungedName);
 
 	if(BFiFileRef_PathNameExists(mungedName) == UUcFalse)
 	{
 		return BFcError_FileNotFound;
 	}
 
-	UUrString_Copy(inFileRef->name, inFileName, BFcMaxPathLength);
+	UUrString_Copy(inFileRef->name, resolved ? mungedName : inFileName, BFcMaxPathLength);
 
 	{
 		char *leaf_name = BFrPath_To_Name(inFileRef->name);
@@ -239,6 +295,7 @@ BFrFileRef_SetName(
 
 		UUrString_Copy(leaf_name, inName, BFcMaxPathLength);
 	}
+	BFiResolveCase(inFileRef->name);
 
 	{
 		char *leaf_name = BFrPath_To_Name(inFileRef->name);
@@ -913,6 +970,7 @@ BFrDirectory_FileIterator_Next(
 
 		if(inFileIterator->directory == NULL)
 		{
+			UUrStartupMessage("cannot open directory %s (errno %d)", inFileIterator->fileRef.name, errno);
 			return UUcError_Generic;
 		}
 
@@ -936,7 +994,9 @@ void
 BFrDirectory_FileIterator_Delete(
 	BFtFileIterator*	inFileIterator)
 {
-	closedir(inFileIterator->directory);
+	if (inFileIterator->directory != NULL) {	// NULL when the directory never opened
+		closedir(inFileIterator->directory);
+	}
 	UUrMemory_Block_Delete(inFileIterator);
 }
 
